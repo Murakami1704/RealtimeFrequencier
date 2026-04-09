@@ -1,0 +1,2 @@
+# RealtimeFrequencier
+リアルタイムで周波数を表示するソフトウェア
