@@ -2,5 +2,5 @@
   <Configurations>
     <Platform Name="x64" />
   </Configurations>
-  <Project Path="RealtimeFrequencier/RealtimeFrequencier.vcxproj" />
+  <Project Path="RealtimeFrequencier/RealtimeFrequencier.vcxproj" Id="bb1ca4a8-0d37-4d16-a346-97fd1978dfb3" />
 </Solution>

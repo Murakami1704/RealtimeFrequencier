@@ -44,7 +44,7 @@ void Main()
 			peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
 
 			double x = (double)i / bufferSize * sceneWidth;
-			double h = peakBuffer[i] * sceneHeight; // 倍率を調整
+			double h = peakBuffer[i] * 800; // 倍率を調整
 
 			// 描画
 			RectF{ Arg::bottomLeft(x, sceneHeight), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
