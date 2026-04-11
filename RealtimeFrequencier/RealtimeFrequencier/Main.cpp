@@ -17,6 +17,14 @@ void Main()
 	// ピークを保持するための配列
 	Array<double> peakBuffer;
 
+	// 定数定義
+	const int NORMAL_MODE = 1;
+	const int REMAIN_MODE = 2;
+
+	// 各変数
+	int mode = NORMAL_MODE;
+
+
 	while (System::Update())
 	{
 		// FFTの結果を取得
@@ -40,9 +48,15 @@ void Main()
 			// 現在の値
 			double currentVal = Pow(fft.buffer[i], 0.4f); // 指数を下げて感度アップ
 
-			// ピーク値を更新（現在の値か、少し減衰させた過去のピーク値の大きい方）
-			peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
-
+			// ピーク値の表示
+			if (mode == NORMAL_MODE) {
+				// 現在の値を表示
+				peakBuffer[i] = currentVal;
+			}
+			else {
+				// 現在の値か、少し減衰させた過去のピーク値の大きい方
+				peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
+			}
 			double x = (double)i / bufferSize * sceneWidth;
 			double h = peakBuffer[i] * 800; // 倍率を調整
 
@@ -59,6 +73,18 @@ void Main()
 		Print << U"周波数: {:.1f} Hz (idx: {})"_fmt(frequency, (int32)mouseXIdx);
 		if (frequency > 1000) {
 			Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
+		}
+
+
+		// UI表示
+		if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
+		{
+			mode = NORMAL_MODE;
+		}
+
+		if (SimpleGUI::Button(U"Mode:Remain", Vec2{ 260, 70 }))
+		{
+			mode = REMAIN_MODE;
 		}
 	}
 }
