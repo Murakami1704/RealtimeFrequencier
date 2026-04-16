@@ -1,5 +1,6 @@
 # RealtimeFrequencier
-リアルタイムで周波数を表示するソフトウェア
+リアルタイムで周波数を表示するソフトウェア  
+Murakami1704が自身の開発の一環で作成したツールです。  
 
 こちらを参考にして作りました。  
 https://siv3d.github.io/ja-jp/samples/sound/  
