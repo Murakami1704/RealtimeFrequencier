@@ -1,5 +1,100 @@
 ﻿# include <Siv3D.hpp>
 
+// 定数宣言
+const int NORMAL_MODE = 1;
+const int REMAIN_MODE = 2;
+const int DELTA_MODE = 3;
+
+const int REALTIME_SCENE = 1;
+const int SOUNDPLAY_SCENE = 2;
+
+// 変数宣言
+int mode = NORMAL_MODE;
+int sceneNum = REALTIME_SCENE;
+
+//画面サイズ及びバッファサイズの保存変数
+double sceneWidth;
+double sceneHeight;
+int32 bufferSize;
+
+// 高速フーリエ変換の定義
+FFTResult fft;
+
+// ピークを保持するための配列
+Array<double> peakBuffer;
+
+// ひとつ前を保持するための配列
+Array<double> prevBuffer;
+
+void buttonUI() {
+	if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
+	{
+		mode = NORMAL_MODE;
+	}
+
+	if (SimpleGUI::Button(U"Mode:Remain", Vec2{ 260, 70 }))
+	{
+		mode = REMAIN_MODE;
+	}
+
+	if (SimpleGUI::Button(U"Mode:Delta", Vec2{ 260, 120 }))
+	{
+		mode = DELTA_MODE;
+	}
+}
+
+void softInit() {
+	if (peakBuffer.size() != fft.buffer.size())
+	{
+		peakBuffer.resize(fft.buffer.size(), 0.0);
+	}
+	if (prevBuffer.size() != fft.buffer.size())
+	{
+		prevBuffer.resize(fft.buffer.size(), 0.0);
+	}
+}
+
+void mouseUI() {
+	double mouseXIdx = (Cursor::Pos().x / sceneWidth) * bufferSize;
+	double frequency = mouseXIdx * fft.resolution;
+
+	RectF{ Cursor::Pos().x, 0, 1, sceneHeight }.draw(Palette::White);
+
+	Print << U"周波数: {:.1f} Hz (idx: {})"_fmt(frequency, (int32)mouseXIdx);
+	if (frequency > 1000) {
+		Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
+	}
+}
+
+void displayFrequency(double currentVal, int i) {
+	// ピーク値の表示
+	if (mode == NORMAL_MODE) {
+		// 現在の値を表示
+		peakBuffer[i] = currentVal;
+	}
+	else if (mode == REMAIN_MODE) {
+		// 現在の値か、少し減衰させた過去のピーク値の大きい方
+		peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
+	}
+	else if (mode == DELTA_MODE) {
+		peakBuffer[i] = currentVal - prevBuffer[i];
+		if (peakBuffer[i] < 0) {
+			peakBuffer[i] = 0;
+		}
+		prevBuffer[i] = currentVal;
+	}
+	double x = (double)i / bufferSize * sceneWidth;
+	double h = peakBuffer[i] * 800; // 倍率を調整
+
+	// 描画
+	if (sceneNum == REALTIME_SCENE) {
+		RectF{ Arg::bottomLeft(x, sceneHeight), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
+	}
+	else if (sceneNum == SOUNDPLAY_SCENE) {
+		RectF{ Arg::bottomLeft(x, sceneHeight - 120), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
+	}
+}
+
 // シーンマネージャー
 using App = SceneManager<String>;
 
@@ -16,24 +111,13 @@ private:
 	// FFTサイズを小さくして、時間的な反応速度を上げる
 	Microphone mic{ StartImmediately::Yes };
 
-	FFTResult fft;
-
-	// ピークを保持するための配列
-	Array<double> peakBuffer;
-
-	// 定数定義
-	const int NORMAL_MODE = 1;
-	const int REMAIN_MODE = 2;
-
-	// 変数定義
-	int mode = NORMAL_MODE;
-
 public:
 
 	//コンストラクタ
 	RealtimeScene(const InitData& init)
 		: IScene{ init }
 	{
+		sceneNum = REALTIME_SCENE;
 		if (not mic) {
 			// マイクを利用できない場合、終了
 			throw Error{ U"Microphone not available" };
@@ -49,58 +133,26 @@ public:
 		ClearPrint();
 
 		// 初回実行時に配列のサイズを合わせる
-		if (peakBuffer.size() != fft.buffer.size())
-		{
-			peakBuffer.resize(fft.buffer.size(), 0.0);
-		}
+		softInit();
 
 		// 画面のサイズおよび配列のサイズを取得
-		const double sceneWidth = Scene::Width();
-		const double sceneHeight = Scene::Height();
-		const int32 bufferSize = (int32)fft.buffer.size();
+		sceneWidth = Scene::Width();
+		sceneHeight = Scene::Height();
+		bufferSize = (int32)fft.buffer.size();
 
 		for (int32 i = 0; i < bufferSize; ++i)
 		{
 			// 現在の値
 			double currentVal = Pow(fft.buffer[i], 0.4f); // 指数を下げて感度アップ
 
-			// ピーク値の表示
-			if (mode == NORMAL_MODE) {
-				// 現在の値を表示
-				peakBuffer[i] = currentVal;
-			}
-			else {
-				// 現在の値か、少し減衰させた過去のピーク値の大きい方
-				peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
-			}
-			double x = (double)i / bufferSize * sceneWidth;
-			double h = peakBuffer[i] * 800; // 倍率を調整
-
-			// 描画
-			RectF{ Arg::bottomLeft(x, sceneHeight), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
+			displayFrequency(currentVal, i);
 		}
 
 		// マウス位置の周波数を計算
-		double mouseXIdx = (Cursor::Pos().x / sceneWidth) * bufferSize;
-		double frequency = mouseXIdx * fft.resolution;
-
-		Rect{ Cursor::Pos().x, 0, 1, Scene::Height() }.draw(Palette::White);
-
-		Print << U"周波数: {:.1f} Hz (idx: {})"_fmt(frequency, (int32)mouseXIdx);
-		if (frequency > 1000) {
-			Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
-		}
+		mouseUI();
 
 		// UI表示
-		if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
-		{
-			mode = NORMAL_MODE;
-		}
-
-		if (SimpleGUI::Button(U"Mode:Remain", Vec2{ 260, 70 }))
-		{
-			mode = REMAIN_MODE;
-		}
+		buttonUI();
 
 		if (SimpleGUI::Button(U"Scene:Sound Player", Vec2{ 460, 20 }))
 		{
@@ -125,21 +177,8 @@ private:
 	// 音量
 	double volume = 1.0;
 
-	// FFT の結果
-	FFTResult fft;
-
-	// ピークを保持するための配列
-	Array<double> peakBuffer;
-
 	// 再生位置の変更の有無
 	bool seeking = false;
-
-	// 定数定義
-	const int NORMAL_MODE = 1;
-	const int REMAIN_MODE = 2;
-
-	// 変数定義
-	int mode = NORMAL_MODE;
 
 public:
 
@@ -147,7 +186,7 @@ public:
 	SoundPlay(const InitData& init)
 		: IScene{ init }
 	{
-
+		sceneNum = SOUNDPLAY_SCENE;
 	}
 
 	~SoundPlay()
@@ -173,8 +212,8 @@ public:
 		double progress = static_cast<double>(audio.posSample()) / audio.samples();
 
 		// 画面サイズの取得
-		const double sceneWidth = Scene::Width();
-		const double sceneHeight = Scene::Height();
+		sceneWidth = Scene::Width();
+		sceneHeight = Scene::Height();
 
 		if (audio.isPlaying())
 		{
@@ -182,56 +221,24 @@ public:
 			FFT::Analyze(fft, audio);
 
 			// 初回実行時に配列のサイズを合わせる
-			if (peakBuffer.size() != fft.buffer.size())
-			{
-				peakBuffer.resize(fft.buffer.size(), 0.0);
-			}
+			softInit();
 
 			// 配列のサイズを取得
-			const int32 bufferSize = (int32)fft.buffer.size();
+			bufferSize = (int32)fft.buffer.size();
 
 			for (int32 i = 0; i < bufferSize; ++i)
 			{
 				// 現在の値
 				double currentVal = Pow(fft.buffer[i], 0.4f); // 指数を下げて感度アップ
 
-				// ピーク値の表示
-				if (mode == NORMAL_MODE) {
-					// 現在の値を表示
-					peakBuffer[i] = currentVal;
-				}
-				else {
-					// 現在の値か、少し減衰させた過去のピーク値の大きい方
-					peakBuffer[i] = Max(currentVal, peakBuffer[i] * 0.92);
-				}
-				double x = (double)i / bufferSize * sceneWidth;
-				double h = peakBuffer[i] * 800; // 倍率を調整
-
-				// 描画
-				RectF{ Arg::bottomLeft(x, sceneHeight - 120), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
+				displayFrequency(currentVal, i);
 			}
 
 			// マウス位置の周波数を計算
-			double mouseXIdx = (Cursor::Pos().x / sceneWidth) * bufferSize;
-			double frequency = mouseXIdx * fft.resolution;
-
-			Rect{ Cursor::Pos().x, 0, 1, Scene::Height() }.draw(Palette::White);
-
-			Print << U"周波数: {:.1f} Hz (idx: {})"_fmt(frequency, (int32)mouseXIdx);
-			if (frequency > 1000) {
-				Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
-			}
+			mouseUI();
 
 			// UI表示
-			if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
-			{
-				mode = NORMAL_MODE;
-			}
-
-			if (SimpleGUI::Button(U"Mode:Remain", Vec2{ 260, 70 }))
-			{
-				mode = REMAIN_MODE;
-			}
+			buttonUI();
 
 			if (SimpleGUI::Button(U"Scene:Realtime", Vec2{ 460, 20 }))
 			{
