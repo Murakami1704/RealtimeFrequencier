@@ -12,6 +12,12 @@ const int SOUNDPLAY_SCENE = 2;
 int mode = NORMAL_MODE;
 int sceneNum = REALTIME_SCENE;
 
+// クラスのメンバ変数として定義
+Array<Image> frames;
+bool isRecording = false;
+Array<double> averageArray;
+Array<double> flatnessArray;
+
 //画面サイズ及びバッファサイズの保存変数
 double sceneWidth;
 double sceneHeight;
@@ -25,6 +31,11 @@ Array<double> peakBuffer;
 
 // ひとつ前を保持するための配列
 Array<double> prevBuffer;
+
+// 周波数帯域ごとの平均値ととる
+double frequencyAve = 0;
+double frequencyLog = 0;
+double flatness = 0;
 
 void buttonUI() {
 	if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
@@ -64,6 +75,8 @@ void mouseUI() {
 	if (frequency > 1000) {
 		Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
 	}
+	Print << U"平均音量{:.5f}"_fmt(frequencyAve);
+	Print << U"フラットネス{:.3f}"_fmt(flatness);
 }
 
 void displayFrequency(double currentVal, int i) {
@@ -83,6 +96,11 @@ void displayFrequency(double currentVal, int i) {
 		}
 		prevBuffer[i] = currentVal;
 	}
+	peakBuffer[i] += 1e-10;
+
+	frequencyLog += Log(peakBuffer[i]);
+
+	frequencyAve += peakBuffer[i];
 	double x = (double)i / bufferSize * sceneWidth;
 	double h = peakBuffer[i] * 800; // 倍率を調整
 
@@ -140,6 +158,11 @@ public:
 		sceneHeight = Scene::Height();
 		bufferSize = (int32)fft.buffer.size();
 
+		// 平均値の初期化
+		frequencyAve = 0;
+		frequencyLog = 0;
+		flatness = 0;
+
 		for (int32 i = 0; i < bufferSize; ++i)
 		{
 			// 現在の値
@@ -147,6 +170,16 @@ public:
 
 			displayFrequency(currentVal, i);
 		}
+
+		frequencyAve /= bufferSize * 1.0;
+
+		frequencyLog /= bufferSize;
+
+		frequencyLog = Exp(frequencyLog);
+
+		flatness = frequencyLog / frequencyAve;
+
+		frequencyAve *= 100.0;
 
 		// マウス位置の周波数を計算
 		mouseUI();
@@ -226,6 +259,11 @@ public:
 			// 配列のサイズを取得
 			bufferSize = (int32)fft.buffer.size();
 
+			// 平均値の初期化
+			frequencyAve = 0;
+			frequencyLog = 0;
+			flatness = 0;
+
 			for (int32 i = 0; i < bufferSize; ++i)
 			{
 				// 現在の値
@@ -233,6 +271,16 @@ public:
 
 				displayFrequency(currentVal, i);
 			}
+
+			frequencyAve /= bufferSize * 1.0;
+
+			frequencyLog /= bufferSize;
+
+			frequencyLog = Exp(frequencyLog);
+
+			flatness = frequencyLog / frequencyAve;
+
+			frequencyAve *= 100.0;
 
 			// マウス位置の周波数を計算
 			mouseUI();
@@ -327,6 +375,53 @@ void Main()
 		if (not manager.update())
 		{
 			break;
+		}
+
+		// Rキーで録画開始/停止の切り替え
+		if (KeyR.down())
+		{
+			isRecording = !isRecording;
+
+			// 録画停止した瞬間に一括保存
+			if (!isRecording)
+			{
+				// 1. CSVオブジェクトを作成
+				CSV csv;
+
+				for (size_t i = 0; i < averageArray.size(); i++) {
+					csv.writeRow(averageArray[i], flatnessArray[i]);
+				}
+
+				if (csv.save(U"analysis_data.csv"));
+
+				averageArray = {};
+				flatnessArray = {};
+
+				for (auto [i, frame] : Indexed(frames))
+				{
+					frame.save(U"frame_{}.png"_fmt(i));
+				}
+				frames.clear(); // メモリ解放
+				System::MessageBoxOK(U"保存完了");
+
+			}
+		}
+
+		if (isRecording)
+		{
+			// 1. 「今の画面を画像にしてほしい」とリクエストする
+			// × ScreenCapture::Request(); 
+			ScreenCapture::RequestCurrentFrame(); // ○ こちらが正解です
+
+			// 2. 画像が届いていたら配列に追加
+			if (ScreenCapture::HasNewFrame())
+			{
+				Image newFrame;
+				ScreenCapture::GetFrame(newFrame);
+				frames.push_back(newFrame);
+				averageArray.push_back(frequencyAve);
+				flatnessArray.push_back(flatness);
+			}
 		}
 	}
 }
