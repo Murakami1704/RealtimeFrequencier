@@ -12,12 +12,15 @@ const int SOUNDPLAY_SCENE = 2;
 int mode = NORMAL_MODE;
 int sceneNum = REALTIME_SCENE;
 
-// クラスのメンバ変数として定義
+// レコーディング用変数
 Array<Image> frames;
 bool isRecording = false;
 Array<double> averageArray;
 Array<double> flatnessArray;
 Array<Array<double>> waveData;
+
+int recordingBeginIndent = 0;
+int recordingEndIndent = 0;
 
 //画面サイズ及びバッファサイズの保存変数
 double sceneWidth;
@@ -38,6 +41,10 @@ double frequencyAve = 0;
 double frequencyLog = 0;
 double flatness = 0;
 
+// テキストボックス
+TextEditState recordingBeginText;
+TextEditState recordingEndText;
+
 void buttonUI() {
 	if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
 	{
@@ -53,6 +60,79 @@ void buttonUI() {
 	{
 		mode = DELTA_MODE;
 	}
+}
+
+void textBoxUI() {
+	SimpleGUI::TextBox(recordingBeginText, Vec2{ 10, 170 }, 150);
+	SimpleGUI::TextBox(recordingEndText, Vec2{ 170, 170 }, 150);
+
+	String beginText_TextBoxUI;
+	String endText_TextBoxUI;
+
+	if (SimpleGUI::Button(U"Recording num Input", Vec2{ 330, 170 }))
+	{
+		if (!isRecording)
+		{
+			beginText_TextBoxUI = recordingBeginText.text;
+			endText_TextBoxUI = recordingEndText.text;
+
+			double beginNum_TextBoxUI = -1;
+			double endNum_TextBoxUI = -1;
+
+			bool errorFlug = false;
+
+			if (beginText_TextBoxUI == U"min")
+			{
+				recordingBeginIndent = 0;
+			}
+			else if (auto val = ParseOpt<double>(beginText_TextBoxUI))
+			{
+				beginNum_TextBoxUI = Parse<double>(beginText_TextBoxUI);
+			}
+			else
+			{
+				errorFlug = true;
+			}
+
+			if (endText_TextBoxUI == U"max")
+			{
+				recordingEndIndent = peakBuffer.size();
+			}
+			else if (auto val = ParseOpt<double>(endText_TextBoxUI))
+			{
+				endNum_TextBoxUI = Parse<double>(endText_TextBoxUI);
+			}
+			else
+			{
+				errorFlug = true;
+			}
+
+			if (beginNum_TextBoxUI >= 0 && endNum_TextBoxUI >= 0)
+			{
+				if (beginNum_TextBoxUI <= endNum_TextBoxUI) {
+					recordingBeginIndent = beginNum_TextBoxUI / fft.resolution;
+					recordingEndIndent = endNum_TextBoxUI / fft.resolution;
+				}
+				else
+				{
+					errorFlug = true;
+				}
+			}
+
+			if (errorFlug)
+			{
+				recordingBeginIndent = 0;
+				recordingEndIndent = peakBuffer.size();
+				return;
+			}
+		}
+	}
+
+	double beginPos_TextBoxUI = 1.0 * recordingBeginIndent / peakBuffer.size() * sceneWidth;
+	double endPos_TextBoxUI = 1.0 * recordingEndIndent / peakBuffer.size() * sceneWidth;
+
+	RectF{ beginPos_TextBoxUI, 0, 1, sceneHeight }.draw(Palette::Red);
+	RectF{ endPos_TextBoxUI - 1, 0, 1, sceneHeight }.draw(Palette::Red);
 }
 
 void softInit() {
@@ -188,6 +268,9 @@ public:
 		// UI表示
 		buttonUI();
 
+		// テキストボックスUI表示
+		textBoxUI();
+
 		if (SimpleGUI::Button(U"Scene:Sound Player", Vec2{ 460, 20 }))
 		{
 			changeScene(U"SoundPlay");
@@ -289,6 +372,9 @@ public:
 			// UI表示
 			buttonUI();
 
+			// テキストボックスUI表示
+			textBoxUI();
+
 			if (SimpleGUI::Button(U"Scene:Realtime", Vec2{ 460, 20 }))
 			{
 				changeScene(U"RealtimeScene");
@@ -383,6 +469,19 @@ void Main()
 		{
 			isRecording = !isRecording;
 
+			// 録画開始した時の処理
+			if (isRecording) {
+				averageArray.push_back(-1);
+				flatnessArray.push_back(-1);
+
+				Array<double> temp;
+				for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
+					temp.push_back(fft.resolution * i);
+				}
+
+				waveData.push_back(temp);
+			}
+
 			// 録画停止した瞬間に一括保存
 			if (!isRecording)
 			{
@@ -414,7 +513,12 @@ void Main()
 			// レコーディング中、各データを保存。
 			averageArray.push_back(frequencyAve);
 			flatnessArray.push_back(flatness);
-			waveData.push_back(peakBuffer);
+			Array<double> temp;
+			for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
+				temp.push_back(peakBuffer[i]);
+			}
+
+			waveData.push_back(temp);
 		}
 	}
 }
