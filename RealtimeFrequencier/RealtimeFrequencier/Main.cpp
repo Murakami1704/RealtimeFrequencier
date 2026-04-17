@@ -21,6 +21,7 @@ Array<Array<double>> waveData;
 
 int recordingBeginIndent = 0;
 int recordingEndIndent = 0;
+int recordingSize = 0;
 
 //画面サイズ及びバッファサイズの保存変数
 double sceneWidth;
@@ -123,8 +124,11 @@ void textBoxUI() {
 			{
 				recordingBeginIndent = 0;
 				recordingEndIndent = peakBuffer.size();
+				recordingSize = recordingEndIndent - recordingBeginIndent + 1;
 				return;
 			}
+
+			recordingSize = recordingEndIndent - recordingBeginIndent + 1;
 		}
 	}
 
@@ -178,10 +182,11 @@ void displayFrequency(double currentVal, int i) {
 		prevBuffer[i] = currentVal;
 	}
 	peakBuffer[i] += 1e-10;
+	if (i >= recordingBeginIndent && i <= recordingEndIndent) {
+		frequencyLog += Log(peakBuffer[i]);
 
-	frequencyLog += Log(peakBuffer[i]);
-
-	frequencyAve += peakBuffer[i];
+		frequencyAve += peakBuffer[i];
+	}
 	double x = (double)i / bufferSize * sceneWidth;
 	double h = peakBuffer[i] * 800; // 倍率を調整
 
@@ -252,9 +257,9 @@ public:
 			displayFrequency(currentVal, i);
 		}
 
-		frequencyAve /= bufferSize * 1.0;
+		frequencyAve /= recordingSize * 1.0;
 
-		frequencyLog /= bufferSize;
+		frequencyLog /= recordingSize;
 
 		frequencyLog = Exp(frequencyLog);
 
@@ -356,9 +361,9 @@ public:
 				displayFrequency(currentVal, i);
 			}
 
-			frequencyAve /= bufferSize * 1.0;
+			frequencyAve /= recordingSize * 1.0;
 
-			frequencyLog /= bufferSize;
+			frequencyLog /= recordingSize;
 
 			frequencyLog = Exp(frequencyLog);
 
@@ -490,7 +495,7 @@ void Main()
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(averageArray[i], flatnessArray[i]);
+					csv.write(i, averageArray[i], flatnessArray[i]);
 
 					for (size_t j = 0; j < waveData[i].size(); j++) {
 						csv.write(waveData[i][j]);
