@@ -17,6 +17,7 @@ Array<Image> frames;
 bool isRecording = false;
 Array<double> averageArray;
 Array<double> flatnessArray;
+Array<Array<double>> waveData;
 
 //画面サイズ及びバッファサイズの保存変数
 double sceneWidth;
@@ -389,19 +390,20 @@ void Main()
 				CSV csv;
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
-					csv.writeRow(averageArray[i], flatnessArray[i]);
+					csv.newLine();
+					csv.write(averageArray[i], flatnessArray[i]);
+
+					for (size_t j = 0; j < waveData[i].size(); j++) {
+						csv.write(waveData[i][j]);
+					}
 				}
 
 				if (csv.save(U"analysis_data.csv"));
 
+				// 配列の初期化
 				averageArray = {};
 				flatnessArray = {};
-
-				for (auto [i, frame] : Indexed(frames))
-				{
-					frame.save(U"frame_{}.png"_fmt(i));
-				}
-				frames.clear(); // メモリ解放
+				waveData = {};
 				System::MessageBoxOK(U"保存完了");
 
 			}
@@ -409,19 +411,10 @@ void Main()
 
 		if (isRecording)
 		{
-			// 1. 「今の画面を画像にしてほしい」とリクエストする
-			// × ScreenCapture::Request(); 
-			ScreenCapture::RequestCurrentFrame(); // ○ こちらが正解です
-
-			// 2. 画像が届いていたら配列に追加
-			if (ScreenCapture::HasNewFrame())
-			{
-				Image newFrame;
-				ScreenCapture::GetFrame(newFrame);
-				frames.push_back(newFrame);
-				averageArray.push_back(frequencyAve);
-				flatnessArray.push_back(flatness);
-			}
+			// レコーディング中、各データを保存。
+			averageArray.push_back(frequencyAve);
+			flatnessArray.push_back(flatness);
+			waveData.push_back(peakBuffer);
 		}
 	}
 }
