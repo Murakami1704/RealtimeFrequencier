@@ -18,6 +18,8 @@ bool isRecording = false;
 Array<double> averageArray;
 Array<double> flatnessArray;
 Array<Array<double>> waveData;
+Array<double> recordingTimeArray;
+double recordingTime = 0;
 
 int recordingBeginIndent = 0;
 int recordingEndIndent = 0;
@@ -300,10 +302,6 @@ public:
 		{
 			changeScene(U"SoundPlay");
 		}
-		if (SimpleGUI::Button(U"Wave Scene", Vec2{ 460, 70 }))
-		{
-			changeScene(U"WaveScene");
-		}
 	}
 
 	// 描画関数
@@ -462,116 +460,6 @@ public:
 	}
 };
 
-// FFT前波形表示シーン
-class WaveScene : public App::Scene
-{
-private:
-	Microphone mic{ StartImmediately::Yes };
-	Array<Vec2> m_points1, m_points2;
-	const size_t m_drawPoints = 200;
-	double m_displayAmplitude;
-
-public:
-	// コンストラクタ（初期化）
-	WaveScene(const InitData& init)
-		: IScene{ init }
-	{
-		if (!mic)
-		{
-			// マイクが利用できない場合の警告など
-			Print << U"Microphone not found.";
-		}
-	}
-
-	// 更新処理
-	void update() override
-	{
-		if (!mic) { return; }
-
-		const Wave& wave = mic.getBuffer();
-		if (wave.isEmpty()) { return; }
-
-		m_points1.clear();
-		m_points2.clear();
-
-		const double centerY = Scene::Center().y;
-		const double width = Scene::Width();
-		const size_t sampleCount = wave.size();
-
-		// 全体の盛り上がり（RMS）を計算
-		double rms = 0.0;
-		for (const auto& sample : wave) { rms += sample.left * sample.left; }
-		rms = Sqrt(rms / sampleCount);
-
-		// 描画用の点群を作成
-		double currentPeak = 0.0;
-		for (const auto& sample : wave)
-		{
-			currentPeak = Max<double>(currentPeak, Abs(sample.left));
-		}
-
-		// 2. ピークホールド（拍手の瞬間を視覚的に引き延ばす）
-		// m_displayAmplitude はメンバ変数として double 型で定義しておいてください
-		m_displayAmplitude = Max(m_displayAmplitude, currentPeak);
-		m_displayAmplitude *= 0.9; // 毎フレーム10%ずつ減衰（余韻を作る）
-
-		// --- ループ部分の変更 ---
-		for (size_t i = 0; i < m_drawPoints; ++i)
-		{
-			size_t idx = Min(i * (sampleCount / m_drawPoints), sampleCount - 1);
-			double x = i * (width / (m_drawPoints - 1));
-
-			// 左右の端を 0 に収束させるフェード
-			double fade = 1.0 - Pow(Abs(2.0 * i / m_drawPoints - 1.0), 4.0);
-
-			// 生の波形データ
-			double rawAmplitude = wave[idx].left;
-
-			// 【改良ポイント】
-			// 基本の高さ(200)に加えて、ピーク値(m_displayAmplitude)に応じたブースト(500)を掛ける
-			// これにより、拍手した瞬間に波全体の振幅が「グワッ」と大きくなります
-			double dynamicHeight = 200.0 + (m_displayAmplitude * 500.0);
-			double height = rawAmplitude * dynamicHeight * fade;
-
-			m_points1 << Vec2{ x, centerY + height };
-
-			// 2つ目の波：少し低くし、さらに RMS を使ってゆったりとした「うねり」を加える
-			// rms も同様に計算しておいたものを使用
-			double waveOffset = Sin(Scene::Time() * 2.0 + x * 0.01) * (10.0 + rms * 50.0);
-			m_points2 << Vec2{ x, centerY + height * 0.7 + waveOffset };
-		}
-
-		// シーン変更
-		if (SimpleGUI::Button(U"Scene:Realtime", Vec2{ 460, 20 }))
-		{
-			changeScene(U"RealtimeScene");
-		}
-	}
-
-	// 描画処理
-	void draw() const override
-	{
-		Scene::SetBackground(Color{ 10, 15, 25 });
-
-		if (m_points1.isEmpty()) { return; }
-
-		{
-			ScopedRenderStates2D blend{ BlendState::Additive };
-
-			// 波の描画
-			LineString{ m_points2 }.draw(10.0, Palette::Royalblue.withAlpha(50));
-			LineString{ m_points1 }.draw(2.0, Palette::Cyan);
-
-			// 装飾：上下に薄くグリッド線
-			for (int32 i : { -100, 100 })
-			{
-				Line{ 0, Scene::Center().y + i, Scene::Width(), Scene::Center().y + i }
-				.draw(1, Color{ 255, 10 });
-			}
-		}
-	}
-};
-
 void Main()
 {
 	// Windowサイズを可変にする
@@ -583,7 +471,6 @@ void Main()
 	// タイトルシーンを登録する
 	manager.add<RealtimeScene>(U"RealtimeScene");
 	manager.add<SoundPlay>(U"SoundPlay");
-	manager.add<WaveScene>(U"WaveScene");
 
 	while (System::Update())
 	{
@@ -601,6 +488,7 @@ void Main()
 
 			// 録画開始した時の処理
 			if (isRecording) {
+				recordingTimeArray.push_back(0);
 				averageArray.push_back(-1);
 				flatnessArray.push_back(-1);
 
@@ -620,7 +508,7 @@ void Main()
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i, averageArray[i], flatnessArray[i]);
+					csv.write(i,recordingTimeArray[i], averageArray[i], flatnessArray[i]);
 
 					for (size_t j = 0; j < waveData[i].size(); j++) {
 						csv.write(waveData[i][j]);
@@ -640,7 +528,10 @@ void Main()
 
 		if (isRecording)
 		{
+			recordingTime += Scene::DeltaTime();
+
 			// レコーディング中、各データを保存。
+			recordingTimeArray.push_back(recordingTime);
 			averageArray.push_back(frequencyAve);
 			flatnessArray.push_back(flatness);
 			Array<double> temp;
