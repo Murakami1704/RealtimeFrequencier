@@ -15,10 +15,15 @@ int sceneNum = REALTIME_SCENE;
 // レコーディング用変数
 Array<Image> frames;
 bool isRecording = false;
+Array<double> recordingTimeArray;
 Array<double> averageArray;
 Array<double> flatnessArray;
+Array<double> centroidArray;
+Array<double> rolloffArray;
+Array<double> fluxArray;
+
 Array<Array<double>> waveData;
-Array<double> recordingTimeArray;
+Array<Array<double>> soundData;
 double recordingTime = 0;
 
 int recordingBeginIndent = 0;
@@ -39,11 +44,21 @@ Array<double> peakBuffer;
 // ひとつ前を保持するための配列
 Array<double> prevBuffer;
 
+// 生データの振幅を保存する変数
+Array<double> nowSoundBuffer;
+
 // 周波数帯域ごとの平均値ととる
 double frequencyAve = 0;
 double frequencyLog = 0;
-double flatness = 0;
-double energy = 0;
+
+// 解析結果
+double spectralFlatness = 0;
+double spectralEnergy = 0;
+double spectralCentroid = 0;
+double spectralRolloff = 0;
+double spectralFlux = 0;
+
+double spectralSum = 0;
 
 // テキストボックス
 TextEditState recordingBeginText;
@@ -168,8 +183,8 @@ void mouseUI() {
 		Print << U"({:.2f} kHz)"_fmt(frequency / 1000.0);
 	}
 	Print << U"平均音量{:.5f}"_fmt(frequencyAve);
-	Print << U"フラットネス{:.3f}"_fmt(flatness);
-	Print << U"エネルギー{:.5f}"_fmt(energy);
+	Print << U"フラットネス{:.3f}"_fmt(spectralFlatness);
+	Print << U"エネルギー{:.5f}"_fmt(spectralEnergy);
 }
 
 void displayFrequency(double currentVal, int i) {
@@ -187,7 +202,6 @@ void displayFrequency(double currentVal, int i) {
 		if (peakBuffer[i] < 0) {
 			peakBuffer[i] = 0;
 		}
-		prevBuffer[i] = currentVal;
 	}
 	peakBuffer[i] += 1e-10;
 	if (i >= recordingBeginIndent && i <= recordingEndIndent) {
@@ -195,7 +209,12 @@ void displayFrequency(double currentVal, int i) {
 
 		frequencyAve += peakBuffer[i];
 
-		energy += peakBuffer[i] * peakBuffer[i];
+		spectralEnergy += peakBuffer[i] * peakBuffer[i];
+
+		spectralCentroid += fft.resolution * i * peakBuffer[i];
+		spectralSum += peakBuffer[i];
+
+		spectralFlux += (currentVal - prevBuffer[i]) * (currentVal - prevBuffer[i]);
 	}
 	double x = (double)i / bufferSize * sceneWidth;
 	double h = peakBuffer[i] * 800; // 倍率を調整
@@ -207,13 +226,18 @@ void displayFrequency(double currentVal, int i) {
 	else if (sceneNum == SOUNDPLAY_SCENE) {
 		RectF{ Arg::bottomLeft(x, sceneHeight - 120), 2, h }.draw(HSV{ 240 - i * 0.05, 0.8, 1.0 });
 	}
+
+	prevBuffer[i] = currentVal;
 }
 
 void paraInit() {
 	frequencyAve = 0;
 	frequencyLog = 0;
-	flatness = 0;
-	energy = 0;
+	spectralFlatness = 0;
+	spectralEnergy = 0;
+	spectralCentroid = 0;
+	spectralSum = 0;
+	spectralFlux = 0;
 	score = 0;
 }
 
@@ -224,9 +248,21 @@ void paraCalc() {
 
 	frequencyLog = Exp(frequencyLog);
 
-	flatness = frequencyLog / frequencyAve;
+	spectralFlatness = frequencyLog / frequencyAve;
 
 	frequencyAve *= 100.0;
+
+	spectralCentroid /= spectralSum;
+
+	double temp = 0;
+
+	for (int i = 0; i < peakBuffer.size(); i++) {
+		temp += peakBuffer[i];
+		if (temp >= spectralSum * 0.85) {
+			spectralRolloff = fft.resolution * i;
+			break;
+		}
+	}
 }
 
 
@@ -263,8 +299,15 @@ public:
 	// 更新関数
 	void update() override
 	{
+		nowSoundBuffer.clear();
 		// FFTの結果を取得
 		mic.fft(fft);
+		const auto buffer = mic.getBuffer();
+		nowSoundBuffer.reserve(buffer.size());
+
+		for (const auto& sample : buffer) {
+			nowSoundBuffer.push_back(sample.left);
+		}
 
 		ClearPrint();
 
@@ -506,21 +549,32 @@ void Main()
 				// 1. CSVオブジェクトを作成
 				CSV csv;
 
+				csv.write(U"Num", U"Time", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
+
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i,recordingTimeArray[i], averageArray[i], flatnessArray[i]);
+					csv.write(i,recordingTimeArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
 
+					/*
 					for (size_t j = 0; j < waveData[i].size(); j++) {
 						csv.write(waveData[i][j]);
 					}
-				}
 
+					csv.write(U" ");
+
+					for (size_t j = 0; j < soundData[i].size(); j++) {
+						csv.write(soundData[i][j]);
+					}
+					*/
+				}
+                                                                   
 				if (csv.save(U"analysis_data.csv"));
 
 				// 配列の初期化
 				averageArray = {};
 				flatnessArray = {};
 				waveData = {};
+				soundData = {};
 				System::MessageBoxOK(U"保存完了");
 
 			}
@@ -533,13 +587,15 @@ void Main()
 			// レコーディング中、各データを保存。
 			recordingTimeArray.push_back(recordingTime);
 			averageArray.push_back(frequencyAve);
-			flatnessArray.push_back(flatness);
-			Array<double> temp;
-			for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
-				temp.push_back(peakBuffer[i]);
-			}
+			flatnessArray.push_back(spectralFlatness);
+			centroidArray.push_back(spectralCentroid);
+			rolloffArray.push_back(spectralRolloff);
+			fluxArray.push_back(spectralFlux);
 
-			waveData.push_back(temp);
+			/*
+			waveData.push_back(peakBuffer);
+			soundData.push_back(nowSoundBuffer);
+			*/
 		}
 	}
 }
