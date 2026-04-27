@@ -47,21 +47,6 @@ double energy = 0;
 TextEditState recordingBeginText;
 TextEditState recordingEndText;
 
-// 拍手検知用変数
-double mu1 = 0.136304622356496;
-double mu2 = 0.024160126888218;
-double mu3 = 2.316141750799116e+08;
-
-double sigma1 = 0.3395;
-double sigma2 = 0.127075532894825;
-double sigma3 = 6.660668362378953e+09;
-
-double w1 = 2.971985566282037;
-double w2 = -0.898513845319185;
-double w3 = 0.420004423143124;
-
-double b = -5.155106101104463;
-
 double score = 0;
 
 double time_RF = 0;
@@ -183,7 +168,6 @@ void mouseUI() {
 	Print << U"平均音量{:.5f}"_fmt(frequencyAve);
 	Print << U"フラットネス{:.3f}"_fmt(flatness);
 	Print << U"エネルギー{:.5f}"_fmt(energy);
-	Print << U"スコア{:.5f}"_fmt(score);
 }
 
 void displayFrequency(double currentVal, int i) {
@@ -243,13 +227,7 @@ void paraCalc() {
 	frequencyAve *= 100.0;
 }
 
-void scoreCalc() {
-	double x1 = (frequencyAve - mu1) / sigma1;
-	double x2 = (flatness - mu2) / sigma2;
-	double x3 = (energy - mu3) / sigma3;
 
-	score = w1 * x1 + w2 * x2 + w3 * x3 + b;
-}
 
 // シーンマネージャー
 using App = SceneManager<String>;
@@ -309,8 +287,6 @@ public:
 
 		paraCalc();
 
-		scoreCalc();
-
 		// マウス位置の周波数を計算
 		mouseUI();
 
@@ -323,91 +299,6 @@ public:
 		if (SimpleGUI::Button(U"Scene:Sound Player", Vec2{ 460, 20 }))
 		{
 			changeScene(U"SoundPlay");
-		}
-		if (SimpleGUI::Button(U"Scene:Hakusyu", Vec2{ 460, 70 }))
-		{
-			changeScene(U"HakusyuScene");
-		}
-	}
-
-	// 描画関数
-	void draw() const override
-	{
-
-	}
-};
-
-class HakusyuScene : public App::Scene
-{
-
-private:
-	// FFTサイズを小さくして、時間的な反応速度を上げる
-	Microphone mic{ StartImmediately::Yes };
-
-public:
-
-	//コンストラクタ
-	HakusyuScene(const InitData& init)
-		: IScene{ init }
-	{
-		sceneNum = REALTIME_SCENE;
-		if (not mic) {
-			// マイクを利用できない場合、終了
-			throw Error{ U"Microphone not available" };
-		}
-	}
-
-	// 更新関数
-	void update() override
-	{
-		// FFTの結果を取得
-		mic.fft(fft);
-
-		ClearPrint();
-
-		// 初回実行時に配列のサイズを合わせる
-		softInit();
-
-		// 画面のサイズおよび配列のサイズを取得
-		sceneWidth = Scene::Width();
-		sceneHeight = Scene::Height();
-		bufferSize = (int32)fft.buffer.size();
-
-		// 平均値の初期化
-		paraInit();
-
-		for (int32 i = 0; i < bufferSize; ++i)
-		{
-			// 現在の値
-			double currentVal = Pow(fft.buffer[i], 0.4f); // 指数を下げて感度アップ
-
-			displayFrequency(currentVal, i);
-		}
-
-		paraCalc();
-
-		scoreCalc();
-
-		if (score > 0) {
-			time_RF = 1.1;
-		}
-
-		time_RF -= 0.05;
-
-		RectF{ sceneWidth, sceneHeight }.draw(ColorF(time_RF));
-
-		// マウス位置の周波数を計算
-		mouseUI();
-
-		// UI表示
-		buttonUI();
-
-		// テキストボックスUI表示
-		textBoxUI();
-
-		if (SimpleGUI::Button(U"Scene:Realtime", Vec2{ 460, 20 }))
-		{
-			changeScene(U"RealtimeScene");
 		}
 	}
 
@@ -578,7 +469,6 @@ void Main()
 	// タイトルシーンを登録する
 	manager.add<RealtimeScene>(U"RealtimeScene");
 	manager.add<SoundPlay>(U"SoundPlay");
-	manager.add<HakusyuScene>(U"HakusyuScene");
 
 	while (System::Update())
 	{
