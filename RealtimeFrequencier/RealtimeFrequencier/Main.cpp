@@ -16,6 +16,7 @@ int sceneNum = REALTIME_SCENE;
 Array<Image> frames;
 bool isRecording = false;
 Array<double> recordingTimeArray;
+Array<double> powerArray;
 Array<double> averageArray;
 Array<double> flatnessArray;
 Array<double> centroidArray;
@@ -57,6 +58,7 @@ double spectralEnergy = 0;
 double spectralCentroid = 0;
 double spectralRolloff = 0;
 double spectralFlux = 0;
+double spectralPower = 0;
 
 double spectralSum = 0;
 
@@ -215,6 +217,7 @@ void displayFrequency(double currentVal, int i) {
 		spectralSum += peakBuffer[i];
 
 		spectralFlux += (currentVal - prevBuffer[i]) * (currentVal - prevBuffer[i]);
+		spectralPower += currentVal * currentVal;
 	}
 	double x = (double)i / bufferSize * sceneWidth;
 	double h = peakBuffer[i] * 800; // 倍率を調整
@@ -239,6 +242,7 @@ void paraInit() {
 	spectralSum = 0;
 	spectralFlux = 0;
 	score = 0;
+	spectralPower = 0;
 }
 
 void paraCalc() {
@@ -252,11 +256,15 @@ void paraCalc() {
 
 	frequencyAve *= 100.0;
 
+	if (spectralSum == 0) {
+		spectralSum += 1e-10;
+	}
+
 	spectralCentroid /= spectralSum;
 
 	double temp = 0;
 
-	for (int i = 0; i < peakBuffer.size(); i++) {
+	for (int i = recordingBeginIndent; i < recordingEndIndent; i++) {
 		temp += peakBuffer[i];
 		if (temp >= spectralSum * 0.85) {
 			spectralRolloff = fft.resolution * i;
@@ -534,6 +542,10 @@ void Main()
 				recordingTimeArray.push_back(0);
 				averageArray.push_back(-1);
 				flatnessArray.push_back(-1);
+				centroidArray.push_back(-1);
+				rolloffArray.push_back(-1);
+				fluxArray.push_back(-1);
+				powerArray.push_back(-1);
 
 				Array<double> temp;
 				for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
@@ -549,11 +561,11 @@ void Main()
 				// 1. CSVオブジェクトを作成
 				CSV csv;
 
-				csv.write(U"Num", U"Time", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
+				csv.write(U"Num", U"Time", U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i,recordingTimeArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
+					csv.write(i, recordingTimeArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
 
 					/*
 					for (size_t j = 0; j < waveData[i].size(); j++) {
@@ -567,7 +579,7 @@ void Main()
 					}
 					*/
 				}
-                                                                   
+
 				if (csv.save(U"analysis_data.csv"));
 
 				// 配列の初期化
@@ -575,6 +587,11 @@ void Main()
 				flatnessArray = {};
 				waveData = {};
 				soundData = {};
+				powerArray = {};
+				recordingTimeArray = {};
+				centroidArray = {};
+				rolloffArray = {};
+				fluxArray = {};
 				System::MessageBoxOK(U"保存完了");
 
 			}
@@ -585,6 +602,7 @@ void Main()
 			recordingTime += Scene::DeltaTime();
 
 			// レコーディング中、各データを保存。
+			powerArray.push_back(spectralPower);
 			recordingTimeArray.push_back(recordingTime);
 			averageArray.push_back(frequencyAve);
 			flatnessArray.push_back(spectralFlatness);
