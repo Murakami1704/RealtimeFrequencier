@@ -23,6 +23,11 @@ Array<double> centroidArray;
 Array<double> rolloffArray;
 Array<double> fluxArray;
 
+// 録画用配列の追加
+Array<double> rmsArray;
+Array<double> zcrArray;
+Array<double> crestArray;
+
 Array<Array<double>> waveData;
 Array<Array<double>> soundData;
 double recordingTime = 0;
@@ -48,6 +53,9 @@ Array<double> prevBuffer;
 // 生データの振幅を保存する変数
 Array<double> nowSoundBuffer;
 
+// 100ms分の生波形を保持するバッファ
+Array<double> waveBuffer;
+
 // 周波数帯域ごとの平均値ととる
 double frequencyAve = 0;
 double frequencyLog = 0;
@@ -61,6 +69,12 @@ double spectralFlux = 0;
 double spectralPower = 0;
 
 double spectralSum = 0;
+
+// 時間領域の解析結果
+double timeRMS = 0;
+double timeZCR = 0;
+double timeCrestFactor = 0;
+
 
 // テキストボックス
 TextEditState recordingBeginText;
@@ -233,7 +247,39 @@ void displayFrequency(double currentVal, int i) {
 	prevBuffer[i] = currentVal;
 }
 
+void timeDomainParaCalc(const Array<double>& samples) {
+	if (samples.isEmpty()) return;
+
+	double sumSq = 0;
+	double maxAbs = 0;
+	int zcrCount = 0;
+	const int N = samples.size();
+
+	for (int i = 0; i < N; ++i) {
+		double s = samples[i];
+		double sAbs = Abs(s);
+
+		// 1. RMSのための二乗和
+		sumSq += s * s;
+
+		// 2. Crest Factorのための最大値
+		if (sAbs > maxAbs) maxAbs = sAbs;
+
+		// 3. ZCRのための符号反転チェック
+		if (i > 0) {
+			if ((samples[i] >= 0 && samples[i - 1] < 0) || (samples[i] < 0 && samples[i - 1] >= 0)) {
+				zcrCount++;
+			}
+		}
+	}
+
+	timeRMS = Sqrt(sumSq / N);
+	timeZCR = (double)zcrCount / (double)N;
+	timeCrestFactor = maxAbs / (timeRMS + 1e-10);
+}
+
 void paraInit() {
+	// 周波数領域変数の初期化
 	frequencyAve = 0;
 	frequencyLog = 0;
 	spectralFlatness = 0;
@@ -243,17 +289,25 @@ void paraInit() {
 	spectralFlux = 0;
 	score = 0;
 	spectralPower = 0;
+
+	// 時間領域変数の初期化
+	timeRMS = 0;
+	timeZCR = 0;
+	timeCrestFactor = 0;
 }
 
 void paraCalc() {
+	// 時間領域の計算を実行
+	timeDomainParaCalc(nowSoundBuffer);
+
+	if (recordingSize <= 0) {
+		return;
+	}
+
 	frequencyAve /= recordingSize * 1.0;
-
 	frequencyLog /= recordingSize;
-
 	frequencyLog = Exp(frequencyLog);
-
 	spectralFlatness = frequencyLog / frequencyAve;
-
 	frequencyAve *= 100.0;
 
 	if (spectralSum == 0) {
@@ -272,8 +326,6 @@ void paraCalc() {
 		}
 	}
 }
-
-
 
 // シーンマネージャー
 using App = SceneManager<String>;
@@ -540,6 +592,9 @@ void Main()
 			// 録画開始した時の処理
 			if (isRecording) {
 				recordingTimeArray.push_back(0);
+				rmsArray.push_back(-1);
+				zcrArray.push_back(-1);
+				crestArray.push_back(-1);
 				averageArray.push_back(-1);
 				flatnessArray.push_back(-1);
 				centroidArray.push_back(-1);
@@ -561,11 +616,11 @@ void Main()
 				// 1. CSVオブジェクトを作成
 				CSV csv;
 
-				csv.write(U"Num", U"Time", U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
+				csv.write(U"Num", U"Time", U"RMS", U"ZCR", U"CrestFactor",  U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i, recordingTimeArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
+					csv.write(i, recordingTimeArray[i], rmsArray[i], zcrArray[i], crestArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
 
 					/*
 					for (size_t j = 0; j < waveData[i].size(); j++) {
@@ -583,15 +638,18 @@ void Main()
 				if (csv.save(U"analysis_data.csv"));
 
 				// 配列の初期化
-				averageArray = {};
-				flatnessArray = {};
-				waveData = {};
-				soundData = {};
-				powerArray = {};
-				recordingTimeArray = {};
-				centroidArray = {};
-				rolloffArray = {};
-				fluxArray = {};
+				recordingTime = 0;
+				recordingTimeArray.clear();
+				powerArray.clear();
+				averageArray.clear();
+				flatnessArray.clear();
+				centroidArray.clear();
+				rolloffArray.clear();
+				fluxArray.clear();
+				// 追加分
+				rmsArray.clear();
+				zcrArray.clear();
+				crestArray.clear();
 				System::MessageBoxOK(U"保存完了");
 
 			}
@@ -600,15 +658,20 @@ void Main()
 		if (isRecording)
 		{
 			recordingTime += Scene::DeltaTime();
-
-			// レコーディング中、各データを保存。
-			powerArray.push_back(spectralPower);
 			recordingTimeArray.push_back(recordingTime);
+
+			// 特徴量を保存
+			powerArray.push_back(spectralPower);
 			averageArray.push_back(frequencyAve);
 			flatnessArray.push_back(spectralFlatness);
 			centroidArray.push_back(spectralCentroid);
 			rolloffArray.push_back(spectralRolloff);
 			fluxArray.push_back(spectralFlux);
+
+			// 時間領域の新しいパラメータを保存
+			rmsArray.push_back(timeRMS);
+			zcrArray.push_back(timeZCR);
+			crestArray.push_back(timeCrestFactor);
 
 			/*
 			waveData.push_back(peakBuffer);
