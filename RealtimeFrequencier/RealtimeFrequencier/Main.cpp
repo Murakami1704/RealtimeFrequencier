@@ -1,5 +1,38 @@
 ﻿# include <Siv3D.hpp>
 
+// ロジスティック回帰結果
+namespace ClapModel {
+	// 平均 (mu)
+	const double M_RMS = 0.0095;
+	const double M_ZCR = 0.0954;
+	const double M_CrestFactor = 41.1050;
+	const double M_Flatness = 0.9067;
+	const double M_Centroid = 8332.2045;
+	const double M_Roll_off = 15615.8469;
+	const double M_Flux = 0.5931;
+
+	// 標準偏差 (sigma)
+	const double S_RMS = 0.0050;
+	const double S_ZCR = 0.0104;
+	const double S_CrestFactor = 26.0275;
+	const double S_Flatness = 0.0313;
+	const double S_Centroid = 662.5878;
+	const double S_Roll_off = 803.2222;
+	const double S_Flux = 1.4977;
+
+	// 重み (weights)
+	const double W_RMS = -0.1337;
+	const double W_ZCR = -0.0246;
+	const double W_CrestFactor = 1.8585;
+	const double W_Flatness = 1.2102;
+	const double W_Centroid = -1.5610;
+	const double W_Roll_off = -0.8582;
+	const double W_Flux = 2.4795;
+
+	// バイアス (bias)
+	const double BIAS = -2.2390;
+}
+
 // 定数宣言
 const int NORMAL_MODE = 1;
 const int REMAIN_MODE = 2;
@@ -27,6 +60,8 @@ Array<double> fluxArray;
 Array<double> rmsArray;
 Array<double> zcrArray;
 Array<double> crestArray;
+
+Array<int> analyzedArray;
 
 Array<Array<double>> waveData;
 Array<Array<double>> soundData;
@@ -75,6 +110,8 @@ double timeRMS = 0;
 double timeZCR = 0;
 double timeCrestFactor = 0;
 
+bool analyzed = false;
+
 
 // テキストボックス
 TextEditState recordingBeginText;
@@ -83,6 +120,24 @@ TextEditState recordingEndText;
 double score = 0;
 
 double time_RF = 0;
+
+bool predictClap() {
+	// 【ガード1】音量が小さすぎる場合は計算すらしない
+	// 拍手なら RMS は 0.01 以上になるはずなので、ここを厳しくする
+	if (timeRMS < 0.015) return false;
+
+	double z = 0;
+	z += ClapModel::W_RMS * (timeRMS - ClapModel::M_RMS) / ClapModel::S_RMS;
+	z += ClapModel::W_ZCR * (timeZCR - ClapModel::M_ZCR) / ClapModel::S_ZCR;
+	z += ClapModel::W_CrestFactor * (timeCrestFactor - ClapModel::M_CrestFactor) / ClapModel::S_CrestFactor;
+	z += ClapModel::W_Flatness * (spectralFlatness - ClapModel::M_Flatness) / ClapModel::S_Flatness;
+	z += ClapModel::W_Centroid * (spectralCentroid - ClapModel::M_Centroid) / ClapModel::S_Centroid;
+	z += ClapModel::W_Roll_off * (spectralRolloff - ClapModel::M_Roll_off) / ClapModel::S_Roll_off;
+	z += ClapModel::W_Flux * (spectralFlux - ClapModel::M_Flux) / ClapModel::S_Flux;
+	z += ClapModel::BIAS;
+
+	return (z > 0);
+}
 
 void buttonUI() {
 	if (SimpleGUI::Button(U"Mode:Normal", Vec2{ 260, 20 }))
@@ -294,6 +349,8 @@ void paraInit() {
 	timeRMS = 0;
 	timeZCR = 0;
 	timeCrestFactor = 0;
+
+	analyzed = false;
 }
 
 void paraCalc() {
@@ -404,6 +461,10 @@ public:
 		if (SimpleGUI::Button(U"Scene:Sound Player", Vec2{ 460, 20 }))
 		{
 			changeScene(U"SoundPlay");
+		}
+		if (SimpleGUI::Button(U"Scene:Analyze", Vec2{ 460, 70 }))
+		{
+			changeScene(U"AnalyzeScene");
 		}
 	}
 
@@ -563,6 +624,91 @@ public:
 	}
 };
 
+// 解析結果表示シーン
+class AnalyzedScene : public App::Scene
+{
+
+private:
+	// FFTサイズを小さくして、時間的な反応速度を上げる
+	Microphone mic{ StartImmediately::Yes };
+
+public:
+
+	//コンストラクタ
+	AnalyzedScene(const InitData& init)
+		: IScene{ init }
+	{
+		sceneNum = REALTIME_SCENE;
+		if (not mic) {
+			// マイクを利用できない場合、終了
+			throw Error{ U"Microphone not available" };
+		}
+	}
+
+	// 更新関数
+	void update() override
+	{
+		RectF{ sceneWidth, sceneHeight }.draw(ColorF(time_RF));
+
+		// FFTの結果を取得
+		mic.fft(fft);
+
+		nowSoundBuffer.clear();
+		const auto buffer = mic.getBuffer();
+		nowSoundBuffer.reserve(buffer.size());
+
+		for (const auto& sample : buffer) {
+			nowSoundBuffer.push_back(sample.left);
+		}
+
+
+		ClearPrint();
+
+		// 初回実行時に配列のサイズを合わせる
+		softInit();
+
+		// 画面のサイズおよび配列のサイズを取得
+		sceneWidth = Scene::Width();
+		sceneHeight = Scene::Height();
+		bufferSize = (int32)fft.buffer.size();
+
+		// 平均値の初期化
+		paraInit();
+
+		for (int32 i = 0; i < bufferSize; ++i)
+		{
+			// 現在の値
+			double currentVal = Pow(fft.buffer[i], 0.4f); // 指数を下げて感度アップ
+
+			displayFrequency(currentVal, i);
+		}
+
+		paraCalc();
+
+		// 拍手音解析の結果を表示
+		analyzed = predictClap();
+		if (analyzed) {
+			time_RF = 1.1;
+		}
+
+		time_RF -= 0.1;
+
+		// マウス位置の周波数を計算
+		mouseUI();
+
+		// UI表示
+		buttonUI();
+
+		// テキストボックスUI表示
+		textBoxUI();
+
+		if (SimpleGUI::Button(U"Scene:Realtime", Vec2{ 460, 20 }))
+		{
+			changeScene(U"RealtimeScene");
+		}
+	}
+};
+
 void Main()
 {
 	// Windowサイズを可変にする
@@ -574,6 +720,7 @@ void Main()
 	// タイトルシーンを登録する
 	manager.add<RealtimeScene>(U"RealtimeScene");
 	manager.add<SoundPlay>(U"SoundPlay");
+	manager.add<AnalyzedScene>(U"AnalyzedScene");
 
 	while (System::Update())
 	{
@@ -601,6 +748,7 @@ void Main()
 				rolloffArray.push_back(-1);
 				fluxArray.push_back(-1);
 				powerArray.push_back(-1);
+				analyzedArray.push_back(false);
 
 				Array<double> temp;
 				for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
@@ -616,11 +764,11 @@ void Main()
 				// 1. CSVオブジェクトを作成
 				CSV csv;
 
-				csv.write(U"Num", U"Time", U"RMS", U"ZCR", U"CrestFactor",  U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux");
+				csv.write(U"Num", U"Time", U"RMS", U"ZCR", U"CrestFactor",  U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux", U"Judge");
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i, recordingTimeArray[i], rmsArray[i], zcrArray[i], crestArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i]);
+					csv.write(i, recordingTimeArray[i], rmsArray[i], zcrArray[i], crestArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i], analyzedArray[i]);
 
 					/*
 					for (size_t j = 0; j < waveData[i].size(); j++) {
@@ -650,6 +798,7 @@ void Main()
 				rmsArray.clear();
 				zcrArray.clear();
 				crestArray.clear();
+				analyzedArray.clear();
 				System::MessageBoxOK(U"保存完了");
 
 			}
@@ -673,6 +822,12 @@ void Main()
 			zcrArray.push_back(timeZCR);
 			crestArray.push_back(timeCrestFactor);
 
+			if (analyzed) {
+				analyzedArray.push_back(1);
+			}
+			else {
+				analyzedArray.push_back(0);
+			}
 			/*
 			waveData.push_back(peakBuffer);
 			soundData.push_back(nowSoundBuffer);
