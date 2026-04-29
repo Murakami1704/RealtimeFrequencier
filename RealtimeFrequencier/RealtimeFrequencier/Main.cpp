@@ -1,36 +1,40 @@
 ﻿# include <Siv3D.hpp>
 
-// ロジスティック回帰結果
+// 非線形ロジスティック回帰結果
 namespace ClapModel {
-	// 平均 (mu)
-	const double M_RMS = 0.0095;
-	const double M_ZCR = 0.0954;
+	// --- 単体項 ---
 	const double M_CrestFactor = 41.1050;
-	const double M_Flatness = 0.9067;
-	const double M_Centroid = 8332.2045;
-	const double M_Roll_off = 15615.8469;
-	const double M_Flux = 0.5931;
-
-	// 標準偏差 (sigma)
-	const double S_RMS = 0.0050;
-	const double S_ZCR = 0.0104;
 	const double S_CrestFactor = 26.0275;
-	const double S_Flatness = 0.0313;
-	const double S_Centroid = 662.5878;
-	const double S_Roll_off = 803.2222;
-	const double S_Flux = 1.4977;
+	const double W_CrestFactor = 0.9338;
 
-	// 重み (weights)
-	const double W_RMS = -0.1337;
-	const double W_ZCR = -0.0246;
-	const double W_CrestFactor = 1.8585;
-	const double W_Flatness = 1.2102;
-	const double W_Centroid = -1.5610;
-	const double W_Roll_off = -0.8582;
-	const double W_Flux = 2.4795;
+	// --- 二乗項 (x^2) ---
+	const double M_RMS2 = 0.0001;
+	const double S_RMS2 = 0.0001;
+	const double W_RMS2 = -1.4475;
 
-	// バイアス (bias)
-	const double BIAS = -2.2390;
+	const double M_Centroid2 = 69862658.4538;
+	const double S_Centroid2 = 11359442.2800;
+	const double W_Centroid2 = -1.3833;
+
+	// --- 相互作用項 (x * y) ---
+	const double M_RMSxCrest = 0.3160;
+	const double S_RMSxCrest = 0.2182;
+	const double W_RMSxCrest = 2.0790;
+
+	const double M_ZCRxCrest = 3.8130;
+	const double S_ZCRxCrest = 2.2004;
+	const double W_ZCRxCrest = 0.9169;
+
+	const double M_ZCRxCentroid = 793.4064;
+	const double S_ZCRxCentroid = 97.0611;
+	const double W_ZCRxCentroid = -0.0714;
+
+	const double M_ZCRxFlux = 0.0511;
+	const double S_ZCRxFlux = 0.1244;
+	const double W_ZCRxFlux = 2.6366;
+
+	// バイアス
+	const double BIAS = -2.2485;
 }
 
 // 定数宣言
@@ -122,21 +126,41 @@ double score = 0;
 double time_RF = 0;
 
 bool predictClap() {
-	// 【ガード1】音量が小さすぎる場合は計算すらしない
-	// 拍手なら RMS は 0.01 以上になるはずなので、ここを厳しくする
+
+	score = 0;
+
+	// 【ガード1】音量による物理足切り（環境に合わせて 0.010 〜 0.020 で微調整）
 	if (timeRMS < 0.015) return false;
 
-	double z = 0;
-	z += ClapModel::W_RMS * (timeRMS - ClapModel::M_RMS) / ClapModel::S_RMS;
-	z += ClapModel::W_ZCR * (timeZCR - ClapModel::M_ZCR) / ClapModel::S_ZCR;
-	z += ClapModel::W_CrestFactor * (timeCrestFactor - ClapModel::M_CrestFactor) / ClapModel::S_CrestFactor;
-	z += ClapModel::W_Flatness * (spectralFlatness - ClapModel::M_Flatness) / ClapModel::S_Flatness;
-	z += ClapModel::W_Centroid * (spectralCentroid - ClapModel::M_Centroid) / ClapModel::S_Centroid;
-	z += ClapModel::W_Roll_off * (spectralRolloff - ClapModel::M_Roll_off) / ClapModel::S_Roll_off;
-	z += ClapModel::W_Flux * (spectralFlux - ClapModel::M_Flux) / ClapModel::S_Flux;
-	z += ClapModel::BIAS;
+	score = ClapModel::BIAS;
 
-	return (z > 0);
+	// 1. 単体項の加算 (CrestFactorのみ)
+	score += ClapModel::W_CrestFactor * (timeCrestFactor - ClapModel::M_CrestFactor) / ClapModel::S_CrestFactor;
+
+	// 2. 二乗項の加算
+	double valRMS2 = (timeRMS * timeRMS);
+	score += ClapModel::W_RMS2 * (valRMS2 - ClapModel::M_RMS2) / ClapModel::S_RMS2;
+
+	double valCentroid2 = (spectralCentroid * spectralCentroid);
+	score += ClapModel::W_Centroid2 * (valCentroid2 - ClapModel::M_Centroid2) / ClapModel::S_Centroid2;
+
+	// 3. 相互作用項（掛け算）の加算
+	double valRMSxCrest = (timeRMS * timeCrestFactor);
+	score += ClapModel::W_RMSxCrest * (valRMSxCrest - ClapModel::M_RMSxCrest) / ClapModel::S_RMSxCrest;
+
+	double valZCRxCrest = (timeZCR * timeCrestFactor);
+	score += ClapModel::W_ZCRxCrest * (valZCRxCrest - ClapModel::M_ZCRxCrest) / ClapModel::S_ZCRxCrest;
+
+	double valZCRxCentroid = (timeZCR * spectralCentroid);
+	score += ClapModel::W_ZCRxCentroid * (valZCRxCentroid - ClapModel::M_ZCRxCentroid) / ClapModel::S_ZCRxCentroid;
+
+	double valZCRxFlux = (timeZCR * spectralFlux);
+	score += ClapModel::W_ZCRxFlux * (valZCRxFlux - ClapModel::M_ZCRxFlux) / ClapModel::S_ZCRxFlux;
+
+	// スコア確認用デバッグ（必要に応じてコメントアウト解除）
+	Print << U"Score: {:.3f}"_fmt(score);
+
+	return (score > 0);
 }
 
 void buttonUI() {
@@ -464,7 +488,7 @@ public:
 		}
 		if (SimpleGUI::Button(U"Scene:Analyze", Vec2{ 460, 70 }))
 		{
-			changeScene(U"AnalyzeScene");
+			changeScene(U"AnalyzedScene");
 		}
 	}
 
