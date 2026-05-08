@@ -1,40 +1,25 @@
 ﻿# include <Siv3D.hpp>
 
-// 非線形ロジスティック回帰結果
-namespace ClapModel {
-	// --- 単体項 ---
-	const double M_CrestFactor = 41.1050;
-	const double S_CrestFactor = 26.0275;
-	const double W_CrestFactor = 0.9338;
+namespace ClapParams {
+	// 【1】線形ロジスティック回帰用
+	namespace Linear {
+		const double Mu[] = { 0.0081, 0.0701, 56.1024, 0.9165, 8517.8282, 15627.2479, 0.9855 };
+		const double Sigma[] = { 0.0061, 0.0094, 26.1387, 0.0324, 821.2430, 856.1669, 1.5228 };
+		const double Weight[] = { 0.0764, 0.3313, 0.1695, 0.9197, -0.6025, -1.1370, 2.0472 };
+		const double Bias = -2.7998;
+	}
 
-	// --- 二乗項 (x^2) ---
-	const double M_RMS2 = 0.0001;
-	const double S_RMS2 = 0.0001;
-	const double W_RMS2 = -1.4475;
-
-	const double M_Centroid2 = 69862658.4538;
-	const double S_Centroid2 = 11359442.2800;
-	const double W_Centroid2 = -1.3833;
-
-	// --- 相互作用項 (x * y) ---
-	const double M_RMSxCrest = 0.3160;
-	const double S_RMSxCrest = 0.2182;
-	const double W_RMSxCrest = 2.0790;
-
-	const double M_ZCRxCrest = 3.8130;
-	const double S_ZCRxCrest = 2.2004;
-	const double W_ZCRxCrest = 0.9169;
-
-	const double M_ZCRxCentroid = 793.4064;
-	const double S_ZCRxCentroid = 97.0611;
-	const double W_ZCRxCentroid = -0.0714;
-
-	const double M_ZCRxFlux = 0.0511;
-	const double S_ZCRxFlux = 0.1244;
-	const double W_ZCRxFlux = 2.6366;
-
-	// バイアス
-	const double BIAS = -2.2485;
+	// 【2】非線形(二乗)回帰用
+	namespace Nonlinear {
+		const double W_ZCR = 0.1399;   const double M_ZCR = 0.0701;         const double S_ZCR = 0.0094;
+		const double W_CrestFactor = 0.0347;   const double M_CrestFactor = 56.1024;        const double S_CrestFactor = 26.1387;
+		const double W_Flatness = 0.4109;   const double M_Flatness = 0.9165;         const double S_Flatness = 0.0324;
+		const double W_Roll_off = -0.4328;  const double M_Roll_off = 15627.2479;     const double S_Roll_off = 856.1669;
+		const double W_Flux = 2.4123;   const double M_Flux = 0.9855;         const double S_Flux = 1.5228;
+		const double W_ZCR2 = 0.1934;   const double M_ZCR2 = 0.0050;         const double S_ZCR2 = 0.0013;
+		const double W_Rolloff2 = -0.7411;  const double M_Rolloff2 = 244939289.7463; const double S_Rolloff2 = 26786346.2023;
+		const double Bias = -2.8400;
+	}
 }
 
 // 定数宣言
@@ -59,6 +44,11 @@ Array<double> flatnessArray;
 Array<double> centroidArray;
 Array<double> rolloffArray;
 Array<double> fluxArray;
+// 時系列特徴量保存用
+Array<double> rmsDeltaArray;
+Array<double> fluxDeltaArray;
+Array<double> peakLengthArray;
+Array<double> flatnessDeltaArray;
 
 // 録画用配列の追加
 Array<double> rmsArray;
@@ -116,6 +106,18 @@ double timeCrestFactor = 0;
 
 bool analyzed = false;
 
+// 時系列観察のための変数
+
+double prevRMS = 0;
+double prevFlux = 0;
+double prevFlatness = 0;
+
+double fluxDiff = 0;
+double flatnessDiff = 0;
+
+// ピーク継続時間
+int peakContinueFrames = 0;
+
 
 // テキストボックス
 TextEditState recordingBeginText;
@@ -125,42 +127,68 @@ double score = 0;
 
 double time_RF = 0;
 
-bool predictClap() {
+// --- 【1】線形ロジスティック回帰 ---
+bool predictClapLinear() {
+	if (timeRMS < 0.015) return false;
+	score = ClapParams::Linear::Bias;
+	score += ClapParams::Linear::Weight[0] * (timeRMS - ClapParams::Linear::Mu[0]) / ClapParams::Linear::Sigma[0];
+	score += ClapParams::Linear::Weight[1] * (timeZCR - ClapParams::Linear::Mu[1]) / ClapParams::Linear::Sigma[1];
+	score += ClapParams::Linear::Weight[2] * (timeCrestFactor - ClapParams::Linear::Mu[2]) / ClapParams::Linear::Sigma[2];
+	score += ClapParams::Linear::Weight[3] * (spectralFlatness - ClapParams::Linear::Mu[3]) / ClapParams::Linear::Sigma[3];
+	score += ClapParams::Linear::Weight[4] * (spectralCentroid - ClapParams::Linear::Mu[4]) / ClapParams::Linear::Sigma[4];
+	score += ClapParams::Linear::Weight[5] * (spectralRolloff - ClapParams::Linear::Mu[5]) / ClapParams::Linear::Sigma[5];
+	score += ClapParams::Linear::Weight[6] * (spectralFlux - ClapParams::Linear::Mu[6]) / ClapParams::Linear::Sigma[6];
+	return (score > 0);
+}
 
-	score = 0;
+// --- 【2】非線形(二乗)回帰 ---
+bool predictClapNonlinear() {
+	if (timeRMS < 0.015) return false;
+	score = ClapParams::Nonlinear::Bias;
+	score += ClapParams::Nonlinear::W_ZCR * (timeZCR - ClapParams::Nonlinear::M_ZCR) / ClapParams::Nonlinear::S_ZCR;
+	score += ClapParams::Nonlinear::W_CrestFactor * (timeCrestFactor - ClapParams::Nonlinear::M_CrestFactor) / ClapParams::Nonlinear::S_CrestFactor;
+	score += ClapParams::Nonlinear::W_Flatness * (spectralFlatness - ClapParams::Nonlinear::M_Flatness) / ClapParams::Nonlinear::S_Flatness;
+	score += ClapParams::Nonlinear::W_Roll_off * (spectralRolloff - ClapParams::Nonlinear::M_Roll_off) / ClapParams::Nonlinear::S_Roll_off;
+	score += ClapParams::Nonlinear::W_Flux * (spectralFlux - ClapParams::Nonlinear::M_Flux) / ClapParams::Nonlinear::S_Flux;
 
-	// 【ガード1】音量による物理足切り（環境に合わせて 0.010 〜 0.020 で微調整）
+	double zcr2 = (timeZCR * timeZCR);
+	score += ClapParams::Nonlinear::W_ZCR2 * (zcr2 - ClapParams::Nonlinear::M_ZCR2) / ClapParams::Nonlinear::S_ZCR2;
+
+	double roll2 = (spectralRolloff * spectralRolloff);
+	score += ClapParams::Nonlinear::W_Rolloff2 * (roll2 - ClapParams::Nonlinear::M_Rolloff2) / ClapParams::Nonlinear::S_Rolloff2;
+	return (score > 0);
+}
+
+// --- 【3】決定木分析 ---
+bool predictClapTree() {
 	if (timeRMS < 0.015) return false;
 
-	score = ClapModel::BIAS;
-
-	// 1. 単体項の加算 (CrestFactorのみ)
-	score += ClapModel::W_CrestFactor * (timeCrestFactor - ClapModel::M_CrestFactor) / ClapModel::S_CrestFactor;
-
-	// 2. 二乗項の加算
-	double valRMS2 = (timeRMS * timeRMS);
-	score += ClapModel::W_RMS2 * (valRMS2 - ClapModel::M_RMS2) / ClapModel::S_RMS2;
-
-	double valCentroid2 = (spectralCentroid * spectralCentroid);
-	score += ClapModel::W_Centroid2 * (valCentroid2 - ClapModel::M_Centroid2) / ClapModel::S_Centroid2;
-
-	// 3. 相互作用項（掛け算）の加算
-	double valRMSxCrest = (timeRMS * timeCrestFactor);
-	score += ClapModel::W_RMSxCrest * (valRMSxCrest - ClapModel::M_RMSxCrest) / ClapModel::S_RMSxCrest;
-
-	double valZCRxCrest = (timeZCR * timeCrestFactor);
-	score += ClapModel::W_ZCRxCrest * (valZCRxCrest - ClapModel::M_ZCRxCrest) / ClapModel::S_ZCRxCrest;
-
-	double valZCRxCentroid = (timeZCR * spectralCentroid);
-	score += ClapModel::W_ZCRxCentroid * (valZCRxCentroid - ClapModel::M_ZCRxCentroid) / ClapModel::S_ZCRxCentroid;
-
-	double valZCRxFlux = (timeZCR * spectralFlux);
-	score += ClapModel::W_ZCRxFlux * (valZCRxFlux - ClapModel::M_ZCRxFlux) / ClapModel::S_ZCRxFlux;
-
-	// スコア確認用デバッグ（必要に応じてコメントアウト解除）
-	Print << U"Score: {:.3f}"_fmt(score);
-
-	return (score > 0);
+	if (spectralFlux < 2.29793) {
+		if (spectralRolloff < 14915) {
+			if (spectralFlatness < 0.89491) {
+				return false; // 0
+			}
+			else {
+				return true;  // 1
+			}
+		}
+		else {
+			if (timeCrestFactor < 86.2117) {
+				return false; // 0
+			}
+			else {
+				if (timeCrestFactor < 89.1725) {
+					return true;  // 1
+				}
+				else {
+					return false; // 0
+				}
+			}
+		}
+	}
+	else {
+		return true; // 1 (Flux 2.29以上なら確定)
+	}
 }
 
 void buttonUI() {
@@ -406,6 +434,13 @@ void paraCalc() {
 			break;
 		}
 	}
+
+	// =========================
+	// 時系列特徴量
+	// =========================
+
+	fluxDiff = Abs(spectralFlux - prevFlux);
+	flatnessDiff = Abs(spectralFlatness - prevFlatness);
 }
 
 // シーンマネージャー
@@ -710,7 +745,7 @@ public:
 		paraCalc();
 
 		// 拍手音解析の結果を表示
-		analyzed = predictClap();
+		analyzed = predictClapTree();
 		if (analyzed) {
 			time_RF = 1.1;
 		}
@@ -762,18 +797,6 @@ void Main()
 
 			// 録画開始した時の処理
 			if (isRecording) {
-				recordingTimeArray.push_back(0);
-				rmsArray.push_back(-1);
-				zcrArray.push_back(-1);
-				crestArray.push_back(-1);
-				averageArray.push_back(-1);
-				flatnessArray.push_back(-1);
-				centroidArray.push_back(-1);
-				rolloffArray.push_back(-1);
-				fluxArray.push_back(-1);
-				powerArray.push_back(-1);
-				analyzedArray.push_back(false);
-
 				Array<double> temp;
 				for (int i = recordingBeginIndent; i <= recordingEndIndent; i++) {
 					temp.push_back(fft.resolution * i);
@@ -788,11 +811,43 @@ void Main()
 				// 1. CSVオブジェクトを作成
 				CSV csv;
 
-				csv.write(U"Num", U"Time", U"RMS", U"ZCR", U"CrestFactor",  U"Power", U"Average", U"Flatness", U"Centroid", U"Roll-off", U"Flux", U"Judge");
+				csv.write(
+	U"Num",
+	U"Time",
+	U"RMS",
+	U"ZCR",
+	U"CrestFactor",
+	U"Power",
+	U"Average",
+	U"Flatness",
+	U"Centroid",
+	U"Roll-off",
+	U"Flux",
+	U"RMS_Delta",
+	U"Flux_Delta",
+	U"Flatness_Delta",
+	U"Judge"
+				);
 
 				for (size_t i = 0; i < averageArray.size(); i++) {
 					csv.newLine();
-					csv.write(i, recordingTimeArray[i], rmsArray[i], zcrArray[i], crestArray[i], powerArray[i], averageArray[i], flatnessArray[i], centroidArray[i], rolloffArray[i], fluxArray[i], analyzedArray[i]);
+					csv.write(
+	i,
+	recordingTimeArray[i],
+	rmsArray[i],
+	zcrArray[i],
+	crestArray[i],
+	powerArray[i],
+	averageArray[i],
+	flatnessArray[i],
+	centroidArray[i],
+	rolloffArray[i],
+	fluxArray[i],
+	rmsDeltaArray[i],
+	fluxDeltaArray[i],
+	flatnessDeltaArray[i],
+	analyzedArray[i]
+					);
 
 					/*
 					for (size_t j = 0; j < waveData[i].size(); j++) {
@@ -822,6 +877,9 @@ void Main()
 				rmsArray.clear();
 				zcrArray.clear();
 				crestArray.clear();
+				rmsDeltaArray.clear();
+				fluxDeltaArray.clear();
+				flatnessDeltaArray.clear();
 				analyzedArray.clear();
 				System::MessageBoxOK(U"保存完了");
 
@@ -846,6 +904,24 @@ void Main()
 			zcrArray.push_back(timeZCR);
 			crestArray.push_back(timeCrestFactor);
 
+			// =========================
+			// 時系列特徴量
+			// =========================
+
+			double rmsDelta = Abs(timeRMS - prevRMS);
+			double fluxDelta = Abs(spectralFlux - prevFlux);
+			double flatnessDelta = Abs(spectralFlatness - prevFlatness);
+
+			// 保存
+			rmsDeltaArray.push_back(rmsDelta);
+			fluxDeltaArray.push_back(fluxDelta);
+			flatnessDeltaArray.push_back(flatnessDelta);
+
+			// 前フレーム更新
+			prevRMS = timeRMS;
+			prevFlux = spectralFlux;
+			prevFlatness = spectralFlatness;
+
 			if (analyzed) {
 				analyzedArray.push_back(1);
 			}
@@ -857,5 +933,10 @@ void Main()
 			soundData.push_back(nowSoundBuffer);
 			*/
 		}
+
+		// 常時更新
+		prevRMS = timeRMS;
+		prevFlux = spectralFlux;
+		prevFlatness = spectralFlatness;
 	}
 }
